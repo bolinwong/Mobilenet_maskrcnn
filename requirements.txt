@@ -4,8 +4,8 @@ Pillow
 cython
 matplotlib
 scikit-image
-keras==2.1.6
+keras
 opencv.python
-h5py==2.10.0
+h5py
 imgaug
 IPython[all]
