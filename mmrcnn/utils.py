@@ -99,7 +99,7 @@ def gt_pred_lists(gt_class_ids, gt_bboxes, pred_class_ids, pred_bboxes, iou_tres
             pred           :    list of size N 
     """
 
-    #dict containing the state of each gt and predicted class (0 : not associated to any other class, 1 : associated to a class)
+    #dict containing the state of each gt and predicted class (0 : not associated to any other class, 1 : associated to a classe)
     gt_class_ids_ = {'state' : [0*i for i in range(len(gt_class_ids))], "gt_class_ids":list(gt_class_ids)}
     pred_class_ids_ = {'state' : [0*i for i in range(len(pred_class_ids))], "pred_class_ids":list(pred_class_ids)}
 
@@ -114,18 +114,14 @@ def gt_pred_lists(gt_class_ids, gt_bboxes, pred_class_ids, pred_bboxes, iou_tres
                 #change the state of the gt and predicted class when an overlapping is found
                 gt_class_ids_['state'][i] = 1
                 pred_class_ids_['state'][j] = 1
-                #gt.append(gt_class)
-                #pred.append(pred_class)
-                
                 #chack if the overlapping objects are from the same class
                 if (gt_class == pred_class):
-                	gt.append(gt_class)
-                	pred.append(pred_class)
+                    gt.append(gt_class)
+                    pred.append(pred_class)
                 #if the overlapping objects are not from the same class 
                 else : 
                     gt.append(gt_class)
                     pred.append(pred_class)
-                
     #look for objects that are not predicted (gt objects that dont exists in pred objects)
     for i, gt_class in enumerate(gt_class_ids_["gt_class_ids"]):
         if gt_class_ids_['state'][i] == 0:
@@ -141,8 +137,80 @@ def gt_pred_lists(gt_class_ids, gt_bboxes, pred_class_ids, pred_bboxes, iou_tres
 
 
 
-#########  Print confusion matrix for the whole dataset and return tp,fp and fn ##########
-#########  The style of this confusion matrix is inspired from https://github.com/wcipriano/pretty-print-confusion-matrix ##########
+#compute average precision in VOC way
+def voc_ap(tp, fp, fn):
+    """
+    tp = true positif vector (each element represent the true positifs of each class)
+    fp = false positif
+    fn = false negatif
+    return : average precision, mean recall and mean precision
+    """
+    
+    #recall and precision : 
+    class_num = len(tp)-1 #eliminate the BG class
+    
+    rec=[0]*class_num
+    prec=[0]*class_num
+    for i in range(class_num):
+        rec[i] = tp[i]/(tp[i]+fn[i])
+        prec[i] =  tp[i]/(tp[i]+fp[i])
+        
+    rec=rec[1:] #eliminate the BG class
+    prec=prec[1:] #eliminate the BG class
+    
+    rec.insert(0, 0.0) # insert 0.0 at begining of list
+    rec.append(1.0) # insert 1.0 at end of list
+    mrec = rec[:]
+    prec.insert(0, 0.0) # insert 0.0 at begining of list
+    prec.append(0.0) # insert 0.0 at end of list
+    mpre = prec[:]
+    """
+     This part makes the precision monotonically decreasing
+        (goes from the end to the beginning)
+        matlab: for i=numel(mpre)-1:-1:1
+                    mpre(i)=max(mpre(i),mpre(i+1));
+    """
+    # matlab indexes start in 1 but python in 0, so I have to do:
+    #     range(start=(len(mpre) - 2), end=0, step=-1)
+    # also the python function range excludes the end, resulting in:
+    #     range(start=(len(mpre) - 2), end=-1, step=-1)
+    for i in range(len(mpre)-2, -1, -1):
+        mpre[i] = max(mpre[i], mpre[i+1])
+    """
+     This part creates a list of indexes where the recall changes
+        matlab: i=find(mrec(2:end)~=mrec(1:end-1))+1;
+    """
+    i_list = []
+    for i in range(1, len(mrec)):
+        if mrec[i] != mrec[i-1]:
+            i_list.append(i) # if it was matlab would be i + 1
+    """
+     The Average Precision (AP) is the area under the curve
+        (numerical integration)
+        matlab: ap=sum((mrec(i)-mrec(i-1)).*mpre(i));
+    """
+    ap = 0.0
+    for i in i_list:
+        ap += ((mrec[i]-mrec[i-1])*mpre[i])
+    return ap, mrec, mpre
+
+#plot the precision recall curv for the whole dataset
+def plot_precision_recall(AP, precisions, recalls):
+    """Draw the precision-recall curve.
+    AP: Average precision at IoU >= 0.5
+    precisions: list of precision values
+    recalls: list of recall values
+    """
+    # Plot the Precision-Recall curve
+    _, ax = plt.subplots(1)
+    ax.set_title("Precision-Recall Curve. AP@50 = {:.3f}".format(AP))
+    ax.set_ylim(0, 1.1)
+    ax.set_xlim(0, 1.1)
+    _ = ax.plot(recalls, precisions)
+
+
+
+#Print confusion matrix for the whole dataset and return tp,fp and fn
 
 def get_new_fig(fn, figsize=[9,9]):
     """ Init graphics """
@@ -329,22 +397,25 @@ def pretty_plot_confusion_matrix(df_cm, annot=True, cmap="Oranges", fmt='.2f', f
 #
 
 def plot_confusion_matrix_from_data(y_test, predictions, columns=None, annot=True, cmap="Oranges",
-      fmt='.2f', fz=11, lw=0.5, cbar=False, figsize=[36,36], show_null_values=0, pred_val_axis='lin'):
+      fmt='.2f', fz=11, lw=0.5, cbar=False, figsize=[24,24], show_null_values=0, pred_val_axis='lin'):
     """
         plot confusion matrix function with y_test (actual values) and predictions (predic),
         whitout a confusion matrix yet
-        return the tp, fp and fn
+        return the tp, fp and fn to calculate the average precision 
     """
+    from sklearn.metrics import confusion_matrix
+    from pandas import DataFrame
 
     #data
     if(not columns):
-        columns = ['class %s' %(i) for i in list(ascii_uppercase)[0:max(len(np.unique(y_test)),len(np.unique(predictions)))]]
+        #labels axis integer:
+        columns = 3
+        #labels axis string:
+        #from string import ascii_uppercase
+        #columns = ['class %s' %(i) for i in list(ascii_uppercase)[0:len(np.unique(y_test))]]
     
-    y_test = np.array(y_test)
-    predictions = np.array(predictions)
-    #confusion matrix 
     confm = confusion_matrix(y_test, predictions)
-    num_classes = len(columns)
+    num_classes = 3
     
     #compute tp fn fp 
     
@@ -357,15 +428,76 @@ def plot_confusion_matrix_from_data(y_test, predictions, columns=None, annot=Tru
         for j in range(confm.shape[1]):
             if i==j:
                 tp[i]+=confm[i][j]
-    
-    #plot
-    df_cm = DataFrame(confm, index=columns, columns=columns)
 
-    pretty_plot_confusion_matrix(df_cm, fz=fz, cmap=cmap, figsize=figsize, show_null_values=show_null_values, 
-        pred_val_axis=pred_val_axis, lw=lw, fmt=fmt)
+    
+    #cmap = 'Oranges';
+    #fz = 24;
+    #figsize=[24,24];
+    #show_null_values = 2
+    df_cm = DataFrame(confm, index=columns, columns=columns)
+    '''
+    true_pos = np.diag(confm) 
+    precision = np.sum(true_pos / np.sum(confm, axis=0))
+    recall = np.sum(true_pos / np.sum(confm, axis=1))
+    '''
+    """
+    tp_and_fn = confm.sum(1)
+    tp_and_fp = confm.sum(0)
+    tp = confm.diagonal()
+    precision = tp / tp_and_fp
+    recall = tp / tp_and_fn
+    """
+    pretty_plot_confusion_matrix(df_cm, fz=fz, cmap=cmap, figsize=figsize, show_null_values=show_null_values, pred_val_axis=pred_val_axis)
     
     return tp, fp, fn
+#
 
+
+#
+#TEST functions
+#
+def _test_cm():
+    #test function with confusion matrix done
+    array = np.array( [[13,  0,  1,  0,  2,  0],
+                       [ 0, 50,  2,  0, 10,  0],
+                       [ 0, 13, 16,  0,  0,  3],
+                       [ 0,  0,  0, 13,  1,  0],
+                       [ 0, 40,  0,  1, 15,  0],
+                       [ 0,  0,  0,  0,  0, 20]])
+    #get pandas dataframe
+    df_cm = DataFrame(array, index=range(1,7), columns=range(1,7))
+    #colormap: see this and choose your more dear
+    cmap = 'PuRd'
+    pretty_plot_confusion_matrix(df_cm, cmap=cmap)
+#
+
+def _test_data_class(columns, y_test=[4,5,6,5,4,4,7,8], predic=[4,5,6,5,4,4,7,8]):
+    """ test function with y_test (actual values) and predictions (predic) """
+    #data
+    y_test = np.array(y_test)
+    predic = np.array(predic)
+    """
+      Examples to validate output (confusion matrix plot)
+        actual: 5 and prediction 1   >>  3
+        actual: 2 and prediction 4   >>  1
+        actual: 3 and prediction 4   >>  10
+    """
+    annot = True;
+    cmap = 'Oranges';
+    fmt = '.2f'
+    lw = 0.6
+    cbar = False
+    show_null_values = 2
+    pred_val_axis = 'y'
+    #size::
+    fz = 24;
+    figsize = [36,36];
+    if(len(y_test) > 10):
+        fz=24; figsize=[36,36];
+    tp, fp, fn = plot_confusion_matrix_from_data(y_test, predic, columns,
+      annot, cmap, fmt, fz, lw, cbar, figsize, show_null_values, pred_val_axis)
+    
+    return tp, fp, fn
 
 ############################################################
 #  Bounding Boxes
